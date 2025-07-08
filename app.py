@@ -8,38 +8,30 @@ from firebase_admin import credentials, firestore
 from ultralytics import YOLO
 from collections import Counter
 
-# --- Inicializar Firebase ---
-if not firebase_admin._apps:
-    cred = credentials.Certificate("vision-app-b5e69-firebase-adminsdk-fbsvc-ba517bfde1.json")
-    firebase_admin.initialize_app(cred)
-db = firestore.client()
+# ------------------------
+# Inicialización Firebase
+# ------------------------
+def init_firebase(json_path: str):
+    if not firebase_admin._apps:
+        cred = credentials.Certificate(json_path)
+        firebase_admin.initialize_app(cred)
+    return firestore.client()
 
-# --- Carga modelo YOLOv8 pequeño ---
-model = YOLO('yolov8n.pt')  # Cambia a otro modelo si quieres
+db = init_firebase("vision-app-b5e69-firebase-adminsdk-fbsvc-ba517bfde1.json")
 
-# --- Funciones ---
+# ------------------------
+# Carga modelo YOLOv8
+# ------------------------
+@st.cache_resource
+def load_yolo_model(model_name="yolov8n.pt"):
+    return YOLO(model_name)
 
-import streamlit as st
-import numpy as np
-import cv2
-from sklearn.cluster import KMeans
-from PIL import Image, ImageDraw, ImageFont
-import firebase_admin
-from firebase_admin import credentials, firestore
-from ultralytics import YOLO
-from collections import Counter
+model = load_yolo_model()
 
-# --- Inicializar Firebase ---
-if not firebase_admin._apps:
-    cred = credentials.Certificate("vision-app-b5e69-firebase-adminsdk-fbsvc-ba517bfde1.json")
-    firebase_admin.initialize_app(cred)
-db = firestore.client()
-
-# --- Carga modelo YOLOv8 pequeño ---
-model = YOLO('yolov8n.pt')  # Cambia a otro modelo si quieres
-
-# Diccionario traducción inglés -> español
-translation_dict = {
+# ------------------------
+# Diccionario traducción inglés -> español (ampliable)
+# ------------------------
+TRANSLATION_DICT = {
     "person": "persona",
     "car": "auto",
     "bicycle": "bicicleta",
@@ -50,173 +42,136 @@ translation_dict = {
     "motorcycle": "motocicleta",
     "traffic light": "semáforo",
     "stop sign": "señal de alto",
-    # agrega más categorías si quieres
+    # Añade más si lo necesitas
 }
 
-# --- Funciones ---
-
-def get_dominant_colors(image_bgr, k=5):
+# ------------------------
+# Función para obtener colores dominantes
+# ------------------------
+def get_dominant_colors(image_bgr: np.ndarray, k: int = 5):
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
     pixels = image_rgb.reshape((-1, 3))
     kmeans = KMeans(n_clusters=k, random_state=42)
     kmeans.fit(pixels)
     colors = kmeans.cluster_centers_.astype(int)
-    labels = kmeans.labels_
-    counts = np.bincount(labels)
-    total = np.sum(counts)
+    counts = np.bincount(kmeans.labels_)
+    total = counts.sum()
     percentages = [(count / total) * 100 for count in counts]
     sorted_indices = np.argsort(percentages)[::-1]
-    sorted_colors = colors[sorted_indices]
-    sorted_percentages = [percentages[i] for i in sorted_indices]
-    return sorted_colors, sorted_percentages
+    return colors[sorted_indices], [percentages[i] for i in sorted_indices]
 
-def rgb_to_hex(color):
+# ------------------------
+# Conversión RGB a HEX
+# ------------------------
+def rgb_to_hex(color: np.ndarray) -> str:
     return '#{:02x}{:02x}{:02x}'.format(*color)
 
-def detect_objects(image_rgb):
+# ------------------------
+# Detectar objetos con YOLO
+# ------------------------
+def detect_objects(image_rgb: np.ndarray):
     results = model(image_rgb)
     boxes = results[0].boxes
     names = results[0].names
+
     detections = []
     coords = []
+
     for box in boxes:
         cls_id = int(box.cls[0])
         label_en = names[cls_id]
-        label_es = translation_dict.get(label_en, label_en)
+        label_es = TRANSLATION_DICT.get(label_en, label_en)
         conf = float(box.conf[0])
         xyxy = box.xyxy[0].cpu().numpy().astype(int)
         detections.append(label_es)
         coords.append((xyxy, label_es, conf))
+
     return detections, coords
-    
-def draw_boxes(image_pil, coords):
+
+# ------------------------
+# Dibujar cajas verdes con texto sobre la imagen PIL
+# ------------------------
+def draw_boxes(image_pil: Image.Image, coords):
     draw = ImageDraw.Draw(image_pil)
     font = ImageFont.load_default()
+
     for (xyxy, label, conf) in coords:
         x1, y1, x2, y2 = xyxy
-        draw.rectangle([x1, y1, x2, y2], outline="green", width=2)
-        text = f"{label} {conf:.2f}"
+        # Dibujar rectángulo verde
+        draw.rectangle([x1, y1, x2, y2], outline="green", width=3)
 
-        # Obtener tamaño del texto (compatible con Pillow moderno)
+        text = f"{label} {conf:.2f}"
+        # Intentar obtener bbox texto (compatible con Pillow actual)
         try:
-            bbox = draw.textbbox((0, 0), text, font=font)
+            bbox = draw.textbbox((x1, y1 - 15), text, font=font)
             text_width = bbox[2] - bbox[0]
             text_height = bbox[3] - bbox[1]
         except AttributeError:
-            # fallback para versiones viejas
             text_width, text_height = font.getsize(text)
 
-        draw.rectangle([x1, y1 - text_height, x1 + text_width, y1], fill="green")
-        draw.text((x1, y1 - text_height), text, fill="white", font=font)
+        # Fondo para texto (con margen)
+        rect_start = (x1, y1 - text_height - 5)
+        rect_end = (x1 + text_width + 4, y1)
+        draw.rectangle([rect_start, rect_end], fill="green")
+        draw.text((x1 + 2, y1 - text_height - 3), text, fill="white", font=font)
+
     return image_pil
 
+# ------------------------
+# App Streamlit
+# ------------------------
+def main():
+    st.set_page_config(page_title="Análisis de Imagen - Colores y Objetos", layout="wide")
+    st.title("Análisis de Colores Dominantes y Clasificación de Objetos")
 
-# --- Streamlit UI ---
+    uploaded_file = st.file_uploader("Sube una imagen (jpg, jpeg, png)", type=["jpg", "jpeg", "png"])
 
-st.title("Detección de Colores Dominantes y Clasificación de Objetos")
+    if uploaded_file:
+        image = Image.open(uploaded_file).convert('RGB')
+        image_np = np.array(image)
+        image_bgr = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
 
-uploaded_file = st.file_uploader("Sube una imagen", type=["jpg", "jpeg", "png"])
+        st.image(image, caption="Imagen Original", use_column_width=True)
 
-if uploaded_file is not None:
-    image = Image.open(uploaded_file).convert('RGB')
-    image_np = np.array(image)
+        # Colores dominantes
+        colors, percentages = get_dominant_colors(image_bgr)
+        st.subheader("Colores dominantes")
+        hex_colors = []
+        for color, perc in zip(colors, percentages):
+            hex_col = rgb_to_hex(color)
+            hex_colors.append({"color": hex_col, "percentage": round(perc, 2)})
+            st.markdown(
+                f"<div style='display:flex; align-items:center;'>"
+                f"<div style='width:40px; height:25px; background-color:{hex_col}; margin-right:10px; border:1px solid #000;'></div>"
+                f"<span>{hex_col} — {perc:.2f}%</span>"
+                f"</div>",
+                unsafe_allow_html=True
+            )
 
-    image_bgr = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
+        # Detección objetos
+        detections, coords = detect_objects(image_np)
+        counts = Counter(detections)
 
-    st.image(image, caption="Imagen original", use_column_width=True)
+        st.subheader("Objetos detectados y contados")
+        if counts:
+            for label, count in counts.items():
+                st.write(f"• **{label.capitalize()}**: {count}")
+        else:
+            st.info("No se detectaron objetos en la imagen.")
 
-    colors, percentages = get_dominant_colors(image_bgr, k=5)
-    st.subheader("Colores dominantes:")
-    hex_colors = []
-    for color, percent in zip(colors, percentages):
-        hex_color = rgb_to_hex(color)
-        hex_colors.append({"color": hex_color, "percentage": round(percent, 2)})
-        st.markdown(
-            f"<div style='display:flex; align-items:center;'>"
-            f"<div style='width:50px; height:25px; background-color:{hex_color}; margin-right:10px;'></div>"
-            f"<span>{hex_color} - {percent:.2f}%</span>"
-            f"</div>",
-            unsafe_allow_html=True
-        )
+        # Dibujar detección sobre la imagen
+        image_annotated = draw_boxes(image.copy(), coords)
+        st.image(image_annotated, caption="Imagen con objetos detectados", use_column_width=True)
 
-    detections, coords = detect_objects(image_np)
+        # Guardar en Firebase
+        doc = {
+            "colores": hex_colors,
+            "objetos": dict(counts),
+            "nombre_imagen": uploaded_file.name,
+            "usuario": "usuario_demo",
+        }
+        db.collection("analisis_imagenes").add(doc)
+        st.success("Datos guardados correctamente en Firebase.")
 
-    counts = Counter(detections)
-
-    st.subheader("Objetos detectados y contados:")
-    if counts:
-        for label, count in counts.items():
-            st.write(f"{label}: {count}")
-    else:
-        st.write("No se detectaron objetos.")
-
-    image_with_boxes = draw_boxes(image.copy(), coords)
-    st.image(image_with_boxes, caption="Imagen con detección de objetos", use_column_width=True)
-
-    data_to_save = {
-        "colores": hex_colors,
-        "objetos": dict(counts),
-        "nombre_imagen": uploaded_file.name,
-        "usuario": "usuario_demo",
-    }
-    db.collection("analisis_imagenes").add(data_to_save)
-    st.success("Datos guardados en Firebase correctamente.")
-
-
-# --- Streamlit UI ---
-
-st.title("Detección de Colores Dominantes y Clasificación de Objetos")
-
-uploaded_file = st.file_uploader("Sube una imagen", type=["jpg", "jpeg", "png"])
-
-if uploaded_file is not None:
-    image = Image.open(uploaded_file).convert('RGB')
-    image_np = np.array(image)
-
-    # Imagen para OpenCV
-    image_bgr = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
-
-    # Mostrar imagen original
-    st.image(image, caption="Imagen original", use_column_width=True)
-
-    # Detectar colores
-    colors, percentages = get_dominant_colors(image_bgr, k=5)
-    st.subheader("Colores dominantes:")
-    hex_colors = []
-    for color, percent in zip(colors, percentages):
-        hex_color = rgb_to_hex(color)
-        hex_colors.append({"color": hex_color, "percentage": round(percent, 2)})
-        st.markdown(
-            f"<div style='display:flex; align-items:center;'>"
-            f"<div style='width:50px; height:25px; background-color:{hex_color}; margin-right:10px;'></div>"
-            f"<span>{hex_color} - {percent:.2f}%</span>"
-            f"</div>",
-            unsafe_allow_html=True
-        )
-
-    # Detectar objetos y obtener coordenadas
-    detections, coords = detect_objects(image_np)
-
-    # Contar objetos por categoría
-    counts = Counter(detections)
-
-    st.subheader("Objetos detectados y contados:")
-    if counts:
-        for label, count in counts.items():
-            st.write(f"{label}: {count}")
-    else:
-        st.write("No se detectaron objetos.")
-
-    # Dibujar cajas y etiquetas sobre la imagen
-    image_with_boxes = draw_boxes(image.copy(), coords)
-    st.image(image_with_boxes, caption="Imagen con detección de objetos", use_column_width=True)
-
-    # Guardar datos en Firebase
-    data_to_save = {
-        "colores": hex_colors,
-        "objetos": dict(counts),
-        "nombre_imagen": uploaded_file.name,
-        "usuario": "usuario_demo",
-    }
-    db.collection("analisis_imagenes").add(data_to_save)
-    st.success("Datos guardados en Firebase correctamente.")
+if __name__ == "__main__":
+    main()
