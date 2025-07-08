@@ -10,7 +10,7 @@ from datetime import datetime
 
 # Inicializar Firebase
 if not firebase_admin._apps:
-    cred = credentials.Certificate("ruta/a/tu/archivo.json")  # ← Cambia esto
+    cred = credentials.Certificate("vision-app-b5e69-firebase-adminsdk-fbsvc-ba517bfde1.json")  # ← Cambia esto
     firebase_admin.initialize_app(cred)
 db = firestore.client()
 
