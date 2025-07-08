@@ -88,7 +88,7 @@ def detect_objects(image_rgb):
         detections.append(label_es)
         coords.append((xyxy, label_es, conf))
     return detections, coords
-
+    
 def draw_boxes(image_pil, coords):
     draw = ImageDraw.Draw(image_pil)
     font = ImageFont.load_default()
@@ -96,10 +96,20 @@ def draw_boxes(image_pil, coords):
         x1, y1, x2, y2 = xyxy
         draw.rectangle([x1, y1, x2, y2], outline="green", width=2)
         text = f"{label} {conf:.2f}"
-        text_size = draw.textsize(text, font=font)
-        draw.rectangle([x1, y1 - text_size[1], x1 + text_size[0], y1], fill="green")
-        draw.text((x1, y1 - text_size[1]), text, fill="white", font=font)
+
+        # Obtener tamaño del texto (compatible con Pillow moderno)
+        try:
+            bbox = draw.textbbox((0, 0), text, font=font)
+            text_width = bbox[2] - bbox[0]
+            text_height = bbox[3] - bbox[1]
+        except AttributeError:
+            # fallback para versiones viejas
+            text_width, text_height = font.getsize(text)
+
+        draw.rectangle([x1, y1 - text_height, x1 + text_width, y1], fill="green")
+        draw.text((x1, y1 - text_height), text, fill="white", font=font)
     return image_pil
+
 
 # --- Streamlit UI ---
 
