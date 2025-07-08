@@ -99,16 +99,16 @@ def draw_boxes(image_pil, coords):
         draw.rectangle([x1, y1, x2, y2], outline="green", width=2)
         text = f"{label} {conf:.2f}"
 
-        # Estimar tamaño del texto
         try:
+            # PIL >= 8.0
             bbox = draw.textbbox((0, 0), text, font=font)
             text_width = bbox[2] - bbox[0]
             text_height = bbox[3] - bbox[1]
         except AttributeError:
-            # Compatibilidad con Pillow viejo
+            # PIL < 8.0
             text_width, text_height = font.getsize(text)
 
-        # Fondo para el texto
+        # Dibujar fondo del texto
         draw.rectangle(
             [x1, y1 - text_height - 4, x1 + text_width + 4, y1],
             fill="green"
