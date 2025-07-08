@@ -12,8 +12,9 @@ from collections import Counter
 # Inicializar Firebase
 # ------------------------
 if not firebase_admin._apps:
-    cred = credentials.Certificate("vision-app-b5e69-firebase-adminsdk-fbsvc-ba517bfde1.json")
+    cred = credentials.Certificate("vision-app-firebase-key.json")
     firebase_admin.initialize_app(cred)
+
 
 db = firestore.client()
 
@@ -99,16 +100,16 @@ def draw_boxes(image_pil, coords):
         draw.rectangle([x1, y1, x2, y2], outline="green", width=2)
         text = f"{label} {conf:.2f}"
 
+        # Estimar tamaño del texto
         try:
-            # PIL >= 8.0
             bbox = draw.textbbox((0, 0), text, font=font)
             text_width = bbox[2] - bbox[0]
             text_height = bbox[3] - bbox[1]
         except AttributeError:
-            # PIL < 8.0
+            # Compatibilidad con Pillow viejo
             text_width, text_height = font.getsize(text)
 
-        # Dibujar fondo del texto
+        # Fondo para el texto
         draw.rectangle(
             [x1, y1 - text_height - 4, x1 + text_width + 4, y1],
             fill="green"
